@@ -21,23 +21,32 @@ pub struct Collection {
     pub context: StatusContext,
 }
 
+#[derive(Default)]
+struct RolloutInfo {
+    path: Option<PathBuf>,
+    model: Option<String>,
+    usage: Option<TokenUsageSnapshot>,
+    limits: Option<RateLimitSnapshot>,
+    session: Option<SessionMetaSnapshot>,
+}
+
 pub fn collect(cfg: &Config) -> Result<Collection> {
     let cwd = std::env::current_dir().context("failed to get current directory")?;
     let git = collect_git(&cwd);
 
-    let codex_home = codex_home();
+    let codex_home_dir = codex_home();
     let sessions_dir = cfg
         .rollout
         .path_override
         .clone()
-        .unwrap_or_else(|| codex_home.join("sessions"));
+        .unwrap_or_else(|| codex_home_dir.join("sessions"));
 
     let rollout = collect_rollout(cfg, &sessions_dir)?;
 
     let context = StatusContext {
         now: Utc::now(),
-        project_root: git.as_ref().and_then(|_| get_git_root(&cwd)),
-        cwd,
+        cwd: cwd.clone(),
+        project_root: get_git_root(&cwd),
         model: rollout.model,
         git,
         usage: rollout.usage,
@@ -46,7 +55,7 @@ pub fn collect(cfg: &Config) -> Result<Collection> {
     };
 
     Ok(Collection {
-        codex_home,
+        codex_home: codex_home_dir,
         sessions_dir,
         latest_rollout: rollout.path,
         context,
@@ -54,35 +63,71 @@ pub fn collect(cfg: &Config) -> Result<Collection> {
 }
 
 fn collect_git(cwd: &Path) -> Option<GitStatus> {
-    let inside = run_git(cwd, ["rev-parse", "--is-inside-work-tree"])?;
-    if inside.trim() != "true" {
-        return None;
+    let output = run_git(cwd, ["status", "--porcelain=2", "--branch"])?;
+
+    let mut branch = "unknown".to_string();
+    let mut staged: u32 = 0;
+    let mut unstaged: u32 = 0;
+    let mut untracked: u32 = 0;
+    let mut conflicted: u32 = 0;
+    let mut ahead: Option<i64> = None;
+    let mut behind: Option<i64> = None;
+
+    for line in output.lines() {
+        if let Some(rest) = line.strip_prefix("# branch.head ") {
+            branch = rest.trim().to_string();
+            continue;
+        }
+
+        if let Some(rest) = line.strip_prefix("# branch.ab ") {
+            let mut parts = rest.split_whitespace();
+            ahead = parts
+                .next()
+                .and_then(|s| s.strip_prefix("+"))
+                .and_then(|s| s.parse::<i64>().ok());
+            behind = parts
+                .next()
+                .and_then(|s| s.strip_prefix("-"))
+                .and_then(|s| s.parse::<i64>().ok());
+            continue;
+        }
+
+        if line.starts_with("1 ") || line.starts_with("2 ") {
+            let mut parts = line.split_whitespace();
+            let _ = parts.next();
+            if let Some(xy) = parts.next() {
+                let bytes = xy.as_bytes();
+                let x = bytes.first().copied().unwrap_or(46);
+                let y = bytes.get(1).copied().unwrap_or(46);
+                if x != 46 {
+                    staged = staged.saturating_add(1);
+                }
+                if y != 46 {
+                    unstaged = unstaged.saturating_add(1);
+                }
+            }
+            continue;
+        }
+
+        if line.starts_with("u ") {
+            conflicted = conflicted.saturating_add(1);
+            continue;
+        }
+
+        if line.starts_with("? ") {
+            untracked = untracked.saturating_add(1);
+        }
     }
 
-    let branch = run_git(cwd, ["rev-parse", "--abbrev-ref", "HEAD"])
-        .unwrap_or_else(|| "unknown".to_string())
-        .trim()
-        .to_string();
-    let dirty = run_git(cwd, ["status", "--porcelain"])
-        .map(|s| !s.trim().is_empty())
-        .unwrap_or(false);
-
-    let ahead_behind = run_git(
-        cwd,
-        ["rev-list", "--left-right", "--count", "@{upstream}...HEAD"],
-    );
-    let (behind, ahead) = ahead_behind
-        .and_then(|text| {
-            let mut parts = text.split_whitespace();
-            let behind = parts.next()?.parse::<i64>().ok();
-            let ahead = parts.next()?.parse::<i64>().ok();
-            Some((behind, ahead))
-        })
-        .unwrap_or((None, None));
+    let dirty = staged + unstaged + untracked + conflicted > 0;
 
     Some(GitStatus {
         branch,
         dirty,
+        staged,
+        unstaged,
+        untracked,
+        conflicted,
         ahead,
         behind,
     })
@@ -99,19 +144,12 @@ fn run_git<const N: usize>(cwd: &Path, args: [&str; N]) -> Option<String> {
         .args(args)
         .output()
         .ok()?;
+
     if !output.status.success() {
         return None;
     }
-    Some(String::from_utf8_lossy(&output.stdout).to_string())
-}
 
-#[derive(Default)]
-struct RolloutInfo {
-    path: Option<PathBuf>,
-    model: Option<String>,
-    usage: Option<TokenUsageSnapshot>,
-    limits: Option<RateLimitSnapshot>,
-    session: Option<SessionMetaSnapshot>,
+    Some(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
 fn collect_rollout(cfg: &Config, sessions_dir: &Path) -> Result<RolloutInfo> {
@@ -170,6 +208,7 @@ fn collect_rollout(cfg: &Config, sessions_dir: &Path) -> Result<RolloutInfo> {
 fn parse_rollout_file(path: &Path) -> Result<RolloutInfo> {
     let file = File::open(path)
         .with_context(|| format!("failed to open rollout file: {}", path.display()))?;
+
     let mut info = RolloutInfo::default();
 
     for line_result in BufReader::new(file).lines() {
@@ -178,6 +217,7 @@ fn parse_rollout_file(path: &Path) -> Result<RolloutInfo> {
             Ok(v) => v,
             Err(_) => continue,
         };
+
         let typ = value
             .get("type")
             .and_then(Value::as_str)
@@ -195,7 +235,12 @@ fn parse_rollout_file(path: &Path) -> Result<RolloutInfo> {
                         .get("cli_version")
                         .and_then(Value::as_str)
                         .map(ToOwned::to_owned),
+                    model_provider: payload
+                        .get("model_provider")
+                        .and_then(Value::as_str)
+                        .map(ToOwned::to_owned),
                 });
+
                 if info.model.is_none() {
                     info.model = payload
                         .get("model_provider")
@@ -212,65 +257,93 @@ fn parse_rollout_file(path: &Path) -> Result<RolloutInfo> {
                 }
             }
             "event_msg" => {
-                let evt = payload
-                    .get("type")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default();
-                if evt != "token_count" {
-                    continue;
-                }
-                let usage = payload.get("info").unwrap_or(&Value::Null);
-                let total = usage
-                    .get("total_token_usage")
-                    .and_then(|v| v.get("total_tokens"))
-                    .and_then(Value::as_i64)
-                    .unwrap_or(0);
-                let input = usage
-                    .get("total_token_usage")
-                    .and_then(|v| v.get("input_tokens"))
-                    .and_then(Value::as_i64)
-                    .unwrap_or(0);
-                let output = usage
-                    .get("total_token_usage")
-                    .and_then(|v| v.get("output_tokens"))
-                    .and_then(Value::as_i64)
-                    .unwrap_or(0);
-                let context_window = usage.get("model_context_window").and_then(Value::as_i64);
-                let used_percent = context_window
-                    .filter(|v| *v > 0)
-                    .map(|v| ((total as f64 / v as f64) * 100.0).round() as i64)
-                    .map(|v| v.clamp(0, 100));
-                let remaining_percent = used_percent.map(|v| 100 - v);
-
-                info.usage = Some(TokenUsageSnapshot {
-                    input_tokens: input,
-                    output_tokens: output,
-                    total_tokens: total,
-                    model_context_window: context_window,
-                    used_percent,
-                    remaining_percent,
-                });
-
-                let primary = payload
-                    .get("rate_limits")
-                    .and_then(|v| v.get("primary"))
-                    .and_then(|v| v.get("used_percent"))
-                    .and_then(Value::as_f64);
-                let secondary = payload
-                    .get("rate_limits")
-                    .and_then(|v| v.get("secondary"))
-                    .and_then(|v| v.get("used_percent"))
-                    .and_then(Value::as_f64);
-                info.limits = Some(RateLimitSnapshot {
-                    primary_used_percent: primary,
-                    secondary_used_percent: secondary,
-                });
+                apply_event_payload(payload, &mut info);
+            }
+            "token_count" => {
+                apply_token_count(payload, &mut info);
             }
             _ => {}
         }
     }
 
+    if info.model.is_none() {
+        info.model = info
+            .session
+            .as_ref()
+            .and_then(|session| session.model_provider.clone());
+    }
+
     Ok(info)
+}
+
+fn apply_event_payload(payload: &Value, info: &mut RolloutInfo) {
+    let event_type = payload
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if event_type != "token_count" {
+        return;
+    }
+
+    apply_token_count(payload, info);
+}
+
+fn apply_token_count(payload: &Value, info: &mut RolloutInfo) {
+    let usage_info = payload.get("info").unwrap_or(payload);
+
+    let total = usage_info
+        .get("total_token_usage")
+        .and_then(|v| v.get("total_tokens"))
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+
+    let input = usage_info
+        .get("total_token_usage")
+        .and_then(|v| v.get("input_tokens"))
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+
+    let output = usage_info
+        .get("total_token_usage")
+        .and_then(|v| v.get("output_tokens"))
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+
+    let context_window = usage_info
+        .get("model_context_window")
+        .and_then(Value::as_i64);
+    let used_percent = context_window
+        .filter(|v| *v > 0)
+        .map(|v| ((total as f64 / v as f64) * 100.0).round() as i64)
+        .map(|v| v.clamp(0, 100));
+
+    info.usage = Some(TokenUsageSnapshot {
+        input_tokens: input,
+        output_tokens: output,
+        total_tokens: total,
+        model_context_window: context_window,
+        used_percent,
+        remaining_percent: used_percent.map(|v| 100 - v),
+    });
+
+    let primary = payload
+        .get("rate_limits")
+        .and_then(|v| v.get("primary"))
+        .and_then(|v| v.get("used_percent"))
+        .and_then(Value::as_f64);
+
+    let secondary = payload
+        .get("rate_limits")
+        .and_then(|v| v.get("secondary"))
+        .and_then(|v| v.get("used_percent"))
+        .and_then(Value::as_f64);
+
+    if primary.is_some() || secondary.is_some() {
+        info.limits = Some(RateLimitSnapshot {
+            primary_used_percent: primary,
+            secondary_used_percent: secondary,
+        });
+    }
 }
 
 #[cfg(test)]
@@ -285,8 +358,7 @@ mod tests {
         std::fs::write(
             &file,
             [
-                r#"{"timestamp":"x","type":"session_meta","payload":{"id":"abc","cli_version":"0.1.0"}}"#,
-                r#"{"timestamp":"x","type":"turn_context","payload":{"model":"gpt-5"}}"#,
+                r#"{"timestamp":"x","type":"session_meta","payload":{"id":"abc","cli_version":"0.1.0","model_provider":"gpt-5"}}"#,
                 r#"{"timestamp":"x","type":"event_msg","payload":{"type":"token_count","info":{"model_context_window":1000,"total_token_usage":{"input_tokens":200,"output_tokens":10,"total_tokens":550}},"rate_limits":{"primary":{"used_percent":30.5}}}}"#,
             ]
             .join("\n"),

@@ -1,0 +1,107 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            asset_name: codexline-linux-x64
+            binary_name: codexline
+            use_cross: true
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            asset_name: codexline-linux-arm64
+            binary_name: codexline
+            use_cross: true
+          - os: macos-13
+            target: x86_64-apple-darwin
+            asset_name: codexline-macos-x64
+            binary_name: codexline
+            use_cross: false
+          - os: macos-14
+            target: aarch64-apple-darwin
+            asset_name: codexline-macos-arm64
+            binary_name: codexline
+            use_cross: false
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            asset_name: codexline-windows-x64.exe
+            binary_name: codexline.exe
+            use_cross: false
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cross
+        if: matrix.use_cross
+        run: cargo install cross --locked || true
+
+      - name: Add rust target
+        if: ${{ !matrix.use_cross }}
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Build binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ matrix.use_cross }}" == "true" ]]; then
+            cross build --release --target "${{ matrix.target }}"
+          else
+            cargo build --release --target "${{ matrix.target }}"
+          fi
+
+      - name: Prepare artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          src="target/${{ matrix.target }}/release/${{ matrix.binary_name }}"
+          dst="dist/${{ matrix.asset_name }}"
+          cp "$src" "$dst"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset_name }}
+          path: dist/${{ matrix.asset_name }}
+
+  publish_release:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Gather release files and checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          find dist -maxdepth 2 -type f -exec cp "{}" release/ \;
+          (
+            cd release
+            sha256sum codexline-* > codexline-checksums.txt
+          )
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          generate_release_notes: true

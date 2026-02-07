@@ -8,12 +8,31 @@ use std::path::{Path, PathBuf};
 pub struct Config {
     #[serde(default = "default_theme")]
     pub theme: String,
-    #[serde(default = "default_separator")]
-    pub separator: String,
+    #[serde(default)]
+    pub style: StyleConfig,
     #[serde(default)]
     pub rollout: RolloutConfig,
+    #[serde(default)]
+    pub diagnostics: DiagnosticsConfig,
     #[serde(default = "default_segments")]
     pub segments: Vec<SegmentConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StyleConfig {
+    #[serde(default)]
+    pub mode: StyleMode,
+    #[serde(default = "default_separator")]
+    pub separator: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum StyleMode {
+    Plain,
+    #[default]
+    NerdFont,
+    Powerline,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -27,14 +46,22 @@ pub struct RolloutConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiagnosticsConfig {
+    #[serde(default = "default_true")]
+    pub warn_once: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SegmentConfig {
     pub id: SegmentId,
     #[serde(default = "default_true")]
     pub enabled: bool,
     #[serde(default)]
-    pub icon: String,
+    pub icon: IconConfig,
     #[serde(default)]
-    pub color: Option<NamedColor>,
+    pub colors: ColorConfig,
+    #[serde(default)]
+    pub styles: TextStyleConfig,
     #[serde(default)]
     pub options: HashMap<String, serde_json::Value>,
 }
@@ -52,9 +79,34 @@ pub enum SegmentId {
     CodexVersion,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct IconConfig {
+    #[serde(default)]
+    pub plain: String,
+    #[serde(default)]
+    pub nerd_font: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ColorConfig {
+    #[serde(default)]
+    pub icon: Option<NamedColor>,
+    #[serde(default)]
+    pub text: Option<NamedColor>,
+    #[serde(default)]
+    pub background: Option<NamedColor>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct TextStyleConfig {
+    #[serde(default)]
+    pub text_bold: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NamedColor {
+    Black,
     Red,
     Green,
     Yellow,
@@ -63,6 +115,13 @@ pub enum NamedColor {
     Cyan,
     White,
     BrightBlack,
+    BrightRed,
+    BrightGreen,
+    BrightYellow,
+    BrightBlue,
+    BrightMagenta,
+    BrightCyan,
+    BrightWhite,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,9 +134,19 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             theme: default_theme(),
-            separator: default_separator(),
+            style: StyleConfig::default(),
             rollout: RolloutConfig::default(),
+            diagnostics: DiagnosticsConfig::default(),
             segments: default_segments(),
+        }
+    }
+}
+
+impl Default for StyleConfig {
+    fn default() -> Self {
+        Self {
+            mode: StyleMode::NerdFont,
+            separator: default_separator(),
         }
     }
 }
@@ -92,12 +161,24 @@ impl Default for RolloutConfig {
     }
 }
 
+impl Default for DiagnosticsConfig {
+    fn default() -> Self {
+        Self {
+            warn_once: default_true(),
+        }
+    }
+}
+
 pub fn config_dir() -> PathBuf {
     codex_home().join("codexline")
 }
 
 pub fn config_path() -> PathBuf {
     config_dir().join("config.toml")
+}
+
+pub fn themes_dir() -> PathBuf {
+    config_dir().join("themes")
 }
 
 pub fn codex_home() -> PathBuf {
@@ -111,11 +192,13 @@ pub fn codex_home() -> PathBuf {
 }
 
 pub fn load() -> Result<Config> {
+    ensure_themes_exist();
     let path = config_path();
     if !path.exists() {
         return Ok(Config::default());
     }
-    load_from_path(&path)
+    let cfg = load_from_path(&path)?;
+    Ok(cfg)
 }
 
 pub fn load_from_path(path: &Path) -> Result<Config> {
@@ -133,15 +216,24 @@ pub fn init() -> Result<InitResult> {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create dir: {}", parent.display()))?;
     }
+
+    crate::themes::write_builtin_themes_if_missing(&themes_dir())?;
+
     if path.exists() {
         return Ok(InitResult::AlreadyExists);
     }
+
     let cfg = Config::default();
     save_to_path(&cfg, &path)?;
     Ok(InitResult::Created)
 }
 
+pub fn save(cfg: &Config) -> Result<()> {
+    save_to_path(cfg, &config_path())
+}
+
 pub fn save_to_path(cfg: &Config, path: &Path) -> Result<()> {
+    cfg.validate()?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create dir: {}", parent.display()))?;
@@ -150,39 +242,107 @@ pub fn save_to_path(cfg: &Config, path: &Path) -> Result<()> {
     fs::write(path, text).with_context(|| format!("failed to write config: {}", path.display()))
 }
 
+pub fn ensure_themes_exist() {
+    let _ = crate::themes::write_builtin_themes_if_missing(&themes_dir());
+}
+
 impl Config {
     pub fn validate(&self) -> Result<()> {
         if self.segments.is_empty() {
             bail!("segments cannot be empty");
         }
+
         let mut seen = HashSet::new();
         for segment in &self.segments {
             if !seen.insert(segment.id) {
                 bail!("duplicate segment id: {:?}", segment.id);
             }
         }
+
+        if self.rollout.max_files == 0 {
+            bail!("rollout.max_files must be greater than 0");
+        }
+
         Ok(())
     }
 }
 
 pub fn default_segments() -> Vec<SegmentConfig> {
     vec![
-        seg(SegmentId::Model, "M", Some(NamedColor::Cyan)),
-        seg(SegmentId::Cwd, "DIR", Some(NamedColor::Blue)),
-        seg(SegmentId::Git, "GIT", Some(NamedColor::Magenta)),
-        seg(SegmentId::Context, "CTX", Some(NamedColor::Yellow)),
-        seg(SegmentId::Tokens, "TOK", Some(NamedColor::Green)),
-        seg(SegmentId::Limits, "LIM", Some(NamedColor::Red)),
+        segment(
+            SegmentId::Model,
+            true,
+            icon("M", "󰭹"),
+            colors(Some(NamedColor::Cyan), Some(NamedColor::BrightCyan)),
+        ),
+        segment(
+            SegmentId::Cwd,
+            true,
+            icon("DIR", ""),
+            colors(Some(NamedColor::Blue), Some(NamedColor::BrightBlue)),
+        ),
+        segment(
+            SegmentId::Git,
+            true,
+            icon("GIT", ""),
+            colors(Some(NamedColor::Magenta), Some(NamedColor::BrightMagenta)),
+        ),
+        segment(
+            SegmentId::Context,
+            true,
+            icon("CTX", "󰘦"),
+            colors(Some(NamedColor::Yellow), Some(NamedColor::BrightYellow)),
+        ),
+        segment(
+            SegmentId::Tokens,
+            true,
+            icon("TOK", "󰆧"),
+            colors(Some(NamedColor::Green), Some(NamedColor::BrightGreen)),
+        ),
+        segment(
+            SegmentId::Limits,
+            true,
+            icon("LIM", "󰾅"),
+            colors(Some(NamedColor::Red), Some(NamedColor::BrightRed)),
+        ),
+        segment(
+            SegmentId::Session,
+            false,
+            icon("SID", "󱂬"),
+            colors(Some(NamedColor::White), Some(NamedColor::BrightWhite)),
+        ),
+        segment(
+            SegmentId::CodexVersion,
+            false,
+            icon("VER", "󰀘"),
+            colors(Some(NamedColor::BrightBlack), Some(NamedColor::White)),
+        ),
     ]
 }
 
-fn seg(id: SegmentId, icon: &str, color: Option<NamedColor>) -> SegmentConfig {
+fn segment(id: SegmentId, enabled: bool, icon: IconConfig, colors: ColorConfig) -> SegmentConfig {
     SegmentConfig {
         id,
-        enabled: true,
-        icon: icon.to_string(),
-        color,
+        enabled,
+        icon,
+        colors,
+        styles: TextStyleConfig::default(),
         options: HashMap::new(),
+    }
+}
+
+fn icon(plain: &str, nerd_font: &str) -> IconConfig {
+    IconConfig {
+        plain: plain.to_string(),
+        nerd_font: nerd_font.to_string(),
+    }
+}
+
+fn colors(icon_color: Option<NamedColor>, text_color: Option<NamedColor>) -> ColorConfig {
+    ColorConfig {
+        icon: icon_color,
+        text: text_color,
+        background: None,
     }
 }
 
@@ -191,7 +351,7 @@ fn default_theme() -> String {
 }
 
 fn default_separator() -> String {
-    " | ".to_string()
+    " · ".to_string()
 }
 
 fn default_scan_depth_days() -> u32 {
@@ -214,5 +374,11 @@ mod tests {
     fn default_config_is_valid() {
         let cfg = Config::default();
         assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn default_segments_include_all() {
+        let cfg = Config::default();
+        assert_eq!(cfg.segments.len(), 8);
     }
 }

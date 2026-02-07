@@ -1,0 +1,31 @@
+name: npm-publish
+
+on:
+  release:
+    types:
+      - published
+  workflow_dispatch:
+
+jobs:
+  publish:
+    if: github.event_name == "workflow_dispatch" || startsWith(github.ref_name, "v")
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+      - name: Verify release asset mapping
+        run: node npm/scripts/verify-release-assets.js
+      - name: Set package version from tag
+        if: startsWith(github.ref_name, "v")
+        working-directory: npm/main
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          npm version "$VERSION" --no-git-tag-version
+      - name: Publish package
+        working-directory: npm/main
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

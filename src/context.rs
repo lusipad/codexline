@@ -18,6 +18,10 @@ pub struct StatusContext {
 pub struct GitStatus {
     pub branch: String,
     pub dirty: bool,
+    pub staged: u32,
+    pub unstaged: u32,
+    pub untracked: u32,
+    pub conflicted: u32,
     pub ahead: Option<i64>,
     pub behind: Option<i64>,
 }
@@ -42,12 +46,5 @@ pub struct RateLimitSnapshot {
 pub struct SessionMetaSnapshot {
     pub thread_id: Option<String>,
     pub cli_version: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct InspectReport {
-    pub codex_home: PathBuf,
-    pub sessions_dir: PathBuf,
-    pub latest_rollout: Option<PathBuf>,
-    pub context: StatusContext,
+    pub model_provider: Option<String>,
 }

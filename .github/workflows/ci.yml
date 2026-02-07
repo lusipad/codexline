@@ -1,0 +1,29 @@
+name: ci
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Verify release asset mapping
+        run: node npm/scripts/verify-release-assets.js
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.78.0"
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+      - name: Format check
+        run: cargo fmt --check
+      - name: Build
+        run: cargo build --locked
+      - name: Test
+        run: cargo test --locked
