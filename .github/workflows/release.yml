@@ -24,12 +24,12 @@ jobs:
             asset_name: codexline-linux-arm64
             binary_name: codexline
             use_cross: true
-          - os: macos-13
+          - os: macos-latest
             target: x86_64-apple-darwin
             asset_name: codexline-macos-x64
             binary_name: codexline
             use_cross: false
-          - os: macos-14
+          - os: macos-latest
             target: aarch64-apple-darwin
             asset_name: codexline-macos-arm64
             binary_name: codexline
@@ -44,17 +44,13 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-
       - uses: dtolnay/rust-toolchain@stable
-
       - name: Install cross
         if: matrix.use_cross
         run: cargo install cross --locked || true
-
       - name: Add rust target
         if: ${{ !matrix.use_cross }}
         run: rustup target add ${{ matrix.target }}
-
       - name: Build binary
         shell: bash
         run: |
@@ -64,7 +60,6 @@ jobs:
           else
             cargo build --release --target "${{ matrix.target }}"
           fi
-
       - name: Prepare artifact
         shell: bash
         run: |
@@ -73,7 +68,6 @@ jobs:
           src="target/${{ matrix.target }}/release/${{ matrix.binary_name }}"
           dst="dist/${{ matrix.asset_name }}"
           cp "$src" "$dst"
-
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -88,7 +82,6 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: dist
-
       - name: Gather release files and checksums
         shell: bash
         run: |
@@ -99,7 +92,6 @@ jobs:
             cd release
             sha256sum codexline-* > codexline-checksums.txt
           )
-
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
