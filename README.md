@@ -125,6 +125,17 @@ icon = "bright_magenta"
 text = "bright_magenta"
 ```
 
+## External bridge (no Codex patch)
+
+Use bridge scripts when you want statusline output around Codex without modifying Codex source:
+
+- Windows install: `pwsh -File scripts/bridge/install-bridge.ps1`
+- Linux/macOS install: `bash scripts/bridge/install-bridge.sh`
+- Windows uninstall: `pwsh -File scripts/bridge/uninstall-bridge.ps1 -RemoveLoopScript`
+- Linux/macOS uninstall: `bash scripts/bridge/uninstall-bridge.sh`
+
+See `scripts/bridge/README.md` for full options.
+
 ## npm distribution
 
 The npm package lives in `npm/main` and installs platform binaries from GitHub Releases.
