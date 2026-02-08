@@ -8,14 +8,17 @@
     "url": "https://github.com/lusipad/codexline.git"
   },
   "bin": {
-    "codexline": "bin/codexline.js"
+    "codexline": "bin/codexline.js",
+    "codexline-bridge": "bin/codexline-bridge.js"
   },
   "scripts": {
-    "postinstall": "node scripts/postinstall.js"
+    "postinstall": "node scripts/postinstall.js",
+    "prepack": "node scripts/sync-bridge-assets.js"
   },
   "files": [
     "bin",
     "scripts",
+    "bridge",
     "README.md"
   ],
   "engines": {
