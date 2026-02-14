@@ -320,6 +320,13 @@ pub fn default_segments() -> Vec<SegmentConfig> {
     ]
 }
 
+pub fn default_segment_for(id: SegmentId) -> SegmentConfig {
+    default_segments()
+        .into_iter()
+        .find(|segment| segment.id == id)
+        .expect("default segment must exist for every segment id")
+}
+
 fn segment(id: SegmentId, enabled: bool, icon: IconConfig, colors: ColorConfig) -> SegmentConfig {
     SegmentConfig {
         id,

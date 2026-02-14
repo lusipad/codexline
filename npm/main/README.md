@@ -10,11 +10,16 @@ This package downloads the correct platform binary from GitHub Releases during p
 npm install -g codexline
 ```
 
-One-shot usage without global install (defaults to `--plain`):
+One-shot usage without global install:
 
 ```bash
 npx codexline
 ```
+
+Behavior with no arguments:
+
+- TTY terminal: opens interactive menu.
+- Non-TTY context (pipe/CI): falls back to `--plain`.
 
 Bridge via the same entrypoint:
 

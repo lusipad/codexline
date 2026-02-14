@@ -3,6 +3,7 @@ mod collect;
 mod config;
 mod context;
 mod patch_diagnose;
+mod profiles;
 mod render;
 mod segments;
 mod themes;
@@ -10,8 +11,10 @@ mod ui;
 
 use anyhow::Result;
 use clap::Parser;
-use cli::{Cli, InspectSource};
+use cli::{Cli, EnhancementKind, InspectSource};
+use profiles::Enhancement;
 use serde::Serialize;
+use std::collections::HashSet;
 use std::io::IsTerminal;
 
 pub fn run() -> Result<()> {
@@ -30,6 +33,43 @@ pub fn run() -> Result<()> {
     }
 
     let mut cfg = config::load()?;
+
+    if cli.quick_config || !cli.enhance.is_empty() {
+        if cli.quick_config {
+            profiles::apply_quick_config(&mut cfg);
+        }
+
+        let mut seen = HashSet::new();
+        let mut applied = Vec::new();
+        for capability in &cli.enhance {
+            if !seen.insert(*capability) {
+                continue;
+            }
+            let enhancement = match capability {
+                EnhancementKind::Git => Enhancement::Git,
+                EnhancementKind::Observability => Enhancement::Observability,
+            };
+            profiles::apply_enhancement(&mut cfg, enhancement);
+            applied.push(*capability);
+        }
+
+        config::save(&cfg)?;
+        println!("saved config: {}", config::config_path().display());
+        if cli.quick_config {
+            println!("- quick profile applied");
+        }
+        for capability in applied {
+            match capability {
+                EnhancementKind::Git => {
+                    println!("- enhancement applied: git (detailed git metrics)")
+                }
+                EnhancementKind::Observability => {
+                    println!("- enhancement applied: observability (usage/limits/session/version)")
+                }
+            }
+        }
+        return Ok(());
+    }
 
     if let Some(theme) = cli.theme.as_deref() {
         cfg = themes::apply_theme(&cfg, theme, &config::themes_dir())?;

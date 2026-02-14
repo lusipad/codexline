@@ -31,7 +31,9 @@ if (!fs.existsSync(binaryPath)) {
   process.exit(1);
 }
 
-const runArgs = args.length === 0 ? ["--plain"] : args;
+const isInteractiveTerminal = Boolean(process.stdin.isTTY && process.stdout.isTTY);
+const runArgs =
+  args.length === 0 && !isInteractiveTerminal ? ["--plain"] : args;
 const child = childProcess.spawn(binaryPath, runArgs, {
   stdio: "inherit",
 });

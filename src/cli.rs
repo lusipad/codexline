@@ -44,6 +44,17 @@ pub struct Cli {
 
     #[arg(long, help = "Output structured JSON")]
     pub json: bool,
+
+    #[arg(long, help = "Apply quick profile and save config")]
+    pub quick_config: bool,
+
+    #[arg(
+        long,
+        value_enum,
+        value_delimiter = ',',
+        help = "Enable enhancement capabilities and save config (git, observability)"
+    )]
+    pub enhance: Vec<EnhancementKind>,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -51,6 +62,12 @@ pub enum InspectSource {
     Rollout,
     Git,
     All,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, ValueEnum)]
+pub enum EnhancementKind {
+    Git,
+    Observability,
 }
 
 impl Cli {
@@ -66,5 +83,7 @@ impl Cli {
             || self.inspect.is_some()
             || self.plain
             || self.json
+            || self.quick_config
+            || !self.enhance.is_empty()
     }
 }

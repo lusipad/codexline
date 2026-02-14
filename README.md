@@ -9,6 +9,7 @@ codexline is a Codex-oriented statusline toolkit inspired by CCometixLine.
 - Context and token usage segments.
 - Rate-limit segment support when rollout contains window data.
 - Theme system with built-in presets and custom theme files.
+- Quick profile setup and targeted enhancement toggles.
 - Full interactive TUI configurator.
 - Patch mode compatibility diagnostics (no binary patching).
 
@@ -18,6 +19,7 @@ codexline is a Codex-oriented statusline toolkit inspired by CCometixLine.
 cargo build --release
 cargo run -- --init
 cargo run -- --plain
+npx codexline
 ```
 
 ## Interactive features
@@ -45,6 +47,10 @@ cargo run -- --plain
 - `codexline --inspect all`
 - `codexline --patch`
 - `codexline --patch --json`
+- `codexline --quick-config`
+- `codexline --enhance git`
+- `codexline --enhance observability`
+- `codexline --quick-config --enhance git,observability`
 
 ## Configuration
 
@@ -94,6 +100,24 @@ text_bold = false
 - `cwd.basename` (bool, default `true`): show only current directory basename.
 - `git.detailed` (bool, default `false`): include staged/unstaged/untracked/conflicted counters.
 - `context.mode` (`remaining` | `used`, default `remaining`): switch context usage wording.
+
+### Quick profile and enhancements
+
+Use quick setup to get a practical baseline in one command:
+
+```bash
+codexline --quick-config
+```
+
+Enable extra capabilities incrementally:
+
+```bash
+# Enhanced Git visibility (ahead/behind + staged/unstaged/untracked/conflicted counters)
+codexline --enhance git
+
+# Enhanced observability (limits/session/version segments + usage-focused context wording)
+codexline --enhance observability
+```
 
 ## Themes
 
